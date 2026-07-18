@@ -1,0 +1,11 @@
+import pandas as pd
+
+nairu = pd.read_csv(r"C:\Users\Sofia\OneDrive - Université Paris-Dauphine\M1 Finance\thèse M1 Finance\Data\raw\Side of Pt\NAIRU.csv")
+unrate = pd.read_csv(r"C:\Users\Sofia\OneDrive - Université Paris-Dauphine\M1 Finance\thèse M1 Finance\Data\raw\Side of Pt\UNRATE.csv")
+
+print("NAIRU head:\n", nairu.head(5).to_string())
+print("\nUNRATE head:\n", unrate.head(5).to_string())
+
+# Check values around 2007 and 2009
+print("\nNAIRU 2007-2009:\n", nairu[nairu.iloc[:,0].astype(str).str.startswith(('2007','2008','2009'))].head(10).to_string())
+print("\nUNRATE 2007-2009:\n", unrate[unrate.iloc[:,0].astype(str).str.startswith(('2007','2008','2009'))].head(10).to_string())

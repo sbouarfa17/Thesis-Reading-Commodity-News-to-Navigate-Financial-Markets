@@ -1,0 +1,351 @@
+# ============================================================
+# 09f_clean_commodities.py
+# EXERCISE 3 — Commodity Futures Portfolios (cm1-cm5)
+#
+# SOURCE:
+#   commodity_prices_endmonth.csv — GSCI sub-indices, end-of-month
+#   price levels. Same data used in Exercises 1 and 2.
+#   (Lumbanraja et al. 2025 / Malliaropulos et al. 2025 dataset)
+#
+# PORTFOLIOS (FLR 2022 notation):
+#   cm1 = Livestock      : LiveCattle, LeanHogs
+#   cm2 = Industrial metals: Copper, Aluminum, Zinc, Nickel
+#   cm3 = Precious metals: Gold, Silver, Platinum
+#   cm4 = Energy         : CrudeOil, HeatingOil, NaturalGas, UnleadedGasoline
+#   cm5 = Agriculture    : Corn, Soybeans, WheatCBOT, Cotton, Coffee, Sugar
+#
+# CONSTRUCTION:
+#   Each portfolio = equal-weighted average of monthly log returns
+#   of its constituent commodities.
+#   log return_t = log(Price_t / Price_{t-1}) x 100 (annualised to %)
+#   No risk-free subtraction needed: commodity futures already
+#   represent excess returns (collateral earns the risk-free rate
+#   separately). This is the standard treatment in FLR (2022).
+#
+# NOTE ON SAMPLE:
+#   commodity_prices_endmonth.csv ends October 2024 (310 obs from
+#   Jan 1999). November and December 2024 are missing (2 months).
+#   This is documented in the thesis. Impact on beta estimation
+#   is negligible (< 1% of the sample).
+#
+# INPUT  : Data/raw/commodity_prices_endmonth.csv
+# OUTPUT : Data/raw/Exercise_3/commodity_total_return.csv
+#          output/figures/Fig_09f_commodities.png
+#
+# HOW TO RUN:
+#   & C:/ProgramData/anaconda3/python.exe 09f_clean_commodities.py
+# ============================================================
+
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import warnings
+warnings.filterwarnings("ignore")
+
+# ── PATHS ─────────────────────────────────────────────────────
+BASE     = r"C:\Users\Sofia\OneDrive - Université Paris-Dauphine\M1 Finance\thèse M1 Finance"
+RAW      = os.path.join(BASE, "Data", "raw")
+RAW_EX3  = os.path.join(BASE, "Data", "raw", "Exercise_3")
+FIG_OUT  = os.path.join(BASE, "output", "figures")
+os.makedirs(FIG_OUT, exist_ok=True)
+
+INPUT_CSV = os.path.join(RAW, "indice prof", "commodity_prices_endmonth.csv")
+OUTPUT_CSV = os.path.join(RAW_EX3, "commodity_total_return.csv")
+OUTPUT_FIG = os.path.join(FIG_OUT,  "Fig16_commodities.png")
+
+# ── STYLE ─────────────────────────────────────────────────────
+plt.rcParams.update({
+    "font.family": "serif", "font.size": 11,
+    "axes.spines.top": False, "axes.spines.right": False,
+    "axes.linewidth": 0.8, "figure.facecolor": "white",
+    "axes.facecolor": "white", "xtick.color": "black",
+    "ytick.color": "black", "axes.labelcolor": "black",
+    "text.color": "black",
+})
+
+FULL_PERIOD = pd.period_range(start="1999-01", end="2024-12", freq="M")
+CORE_PERIOD = pd.period_range(start="2001-05", end="2024-06", freq="M")
+
+print("=" * 65)
+print("09f_clean_commodities.py")
+print("EXERCISE 3 -- Commodity Futures Portfolios (cm1-cm5)")
+print("=" * 65)
+
+# ============================================================
+# PORTFOLIO DEFINITIONS
+# ============================================================
+
+PORTFOLIOS = {
+    "cm1": {
+        "name"  : "Livestock",
+        "cols"  : ["LiveCattle", "LeanHogs"],
+        "desc"  : "Equal-weighted: LiveCattle + LeanHogs",
+    },
+    "cm2": {
+        "name"  : "Industrial Metals",
+        "cols"  : ["Copper", "Aluminum", "Zinc", "Nickel"],
+        "desc"  : "Equal-weighted: Copper + Aluminum + Zinc + Nickel",
+    },
+    "cm3": {
+        "name"  : "Precious Metals",
+        "cols"  : ["Gold", "Silver", "Platinum"],
+        "desc"  : "Equal-weighted: Gold + Silver + Platinum",
+    },
+    "cm4": {
+        "name"  : "Energy",
+        "cols"  : ["CrudeOil", "HeatingOil", "NaturalGas", "UnleadedGasoline"],
+        "desc"  : "Equal-weighted: CrudeOil + HeatingOil + NaturalGas + UnleadedGasoline",
+    },
+    "cm5": {
+        "name"  : "Agriculture",
+        "cols"  : ["Corn", "Soybeans", "WheatCBOT", "Cotton", "Coffee", "Sugar"],
+        "desc"  : "Equal-weighted: Corn + Soybeans + WheatCBOT + Cotton + Coffee + Sugar",
+    },
+}
+
+# ============================================================
+# STEP 1 — LOAD RAW DATA
+# ============================================================
+
+print(f"\n{'─'*65}")
+print("STEP 1 -- Loading commodity_prices_endmonth.csv")
+print(f"{'─'*65}")
+
+raw = pd.read_csv(INPUT_CSV, parse_dates=["date"])
+raw["period"] = raw["date"].dt.to_period("M")
+raw = raw.set_index("period")
+
+# Filter to sample window
+raw = raw.loc["1999-01":"2024-12"]
+
+print(f"  File  : {INPUT_CSV}")
+print(f"  Shape : {raw.shape}")
+print(f"  Range : {raw.index[0]} -> {raw.index[-1]}")
+print(f"  Rows  : {len(raw)}")
+
+if str(raw.index[-1]) < "2024-12":
+    print(f"\n  NOTE: Data ends at {raw.index[-1]} (not Dec 2024).")
+    print(f"  Missing months: Nov-Dec 2024 (2 months).")
+    print(f"  Impact negligible — documented in thesis.")
+
+# ============================================================
+# STEP 2 — COMPUTE MONTHLY LOG RETURNS PER COMMODITY
+# ============================================================
+# Formula: r_t = log(Price_t / Price_{t-1}) x 100
+# = 100 x [log(Price_t) - log(Price_{t-1})]
+# This gives monthly log return in percent.
+# Log returns are additive and symmetric — standard for GSCI data.
+
+print(f"\n{'─'*65}")
+print("STEP 2 -- Computing monthly log returns per commodity")
+print(f"{'─'*65}")
+print("  Formula: r_t = log(Price_t / Price_t-1) x 100\n")
+
+# Get all commodity columns needed
+all_cols = []
+for info in PORTFOLIOS.values():
+    all_cols.extend(info["cols"])
+all_cols = list(set(all_cols))
+
+prices = raw[all_cols].copy()
+
+# Compute log returns
+log_returns = np.log(prices / prices.shift(1)) * 100
+
+# Report individual commodity stats
+for col in sorted(all_cols):
+    s = log_returns[col].dropna()
+    print(f"  {col:<22s} | mean={s.mean():+.3f}%/m  "
+          f"std={s.std():.3f}%/m  N={len(s)}")
+
+# ============================================================
+# STEP 3 — CONSTRUCT EQUAL-WEIGHTED PORTFOLIO RETURNS
+# ============================================================
+
+print(f"\n{'─'*65}")
+print("STEP 3 -- Constructing equal-weighted portfolio returns")
+print(f"{'─'*65}\n")
+
+portfolio_returns = {}
+
+for label, info in PORTFOLIOS.items():
+    cols = info["cols"]
+
+    # Equal-weighted average of log returns across constituents
+    # For each month, average the available (non-NaN) constituent returns
+    port_ret = log_returns[cols].mean(axis=1)
+    port_ret.name = f"ret_{label}"
+
+    # Align to full period
+    port_ret = port_ret.reindex(FULL_PERIOD)
+    portfolio_returns[label] = port_ret
+
+    s = port_ret.dropna()
+    n_miss_core = port_ret.reindex(CORE_PERIOD).isna().sum()
+    print(f"  {label} ({info['name']:<20s}) | "
+          f"mean={s.mean():+.3f}%/m  std={s.std():.3f}%/m  "
+          f"[{s.min():.3f}%, {s.max():.3f}%]  miss_core={n_miss_core}")
+    print(f"       {info['desc']}")
+    print()
+
+# ============================================================
+# STEP 4 — SAVE CSV
+# ============================================================
+
+print(f"\n{'─'*65}")
+print("STEP 4 -- Saving commodity_total_return.csv")
+print(f"{'─'*65}")
+
+df_out = pd.DataFrame(
+    {f"ret_{lbl}": r for lbl, r in portfolio_returns.items()}
+)
+df_out.index.name = "observation_date"
+df_out.index = df_out.index.astype(str)
+df_out.reset_index().to_csv(OUTPUT_CSV, index=False)
+
+print(f"\n  File    : {OUTPUT_CSV}")
+print(f"  Rows    : {len(df_out)}")
+print(f"  Columns : {list(df_out.columns)}")
+print(f"  Units   : % per month (log return, no RF subtraction)")
+print(f"\n  First 3 rows:")
+print(df_out.head(3).round(4).to_string())
+print(f"\n  Last 3 rows:")
+print(df_out.tail(3).round(4).to_string())
+
+# ============================================================
+# STEP 5 — VERIFICATION
+# ============================================================
+
+print(f"\n{'─'*65}")
+print("STEP 5 -- Verification checks")
+print(f"{'─'*65}\n")
+
+all_ok = True
+for label, r in portfolio_returns.items():
+    idx    = pd.PeriodIndex(r.index, freq="M")
+    s_core = r.reindex(CORE_PERIOD)
+    n_miss = s_core.isna().sum()
+    clean  = r.dropna()
+    # Allow for the 2 missing months at end
+    ok = (str(idx.min()) <= "1999-01" and n_miss == 0)
+    status = "OK" if ok else "!!"
+    if not ok:
+        all_ok = False
+    print(f"  {status:<4} ret_{label:<5} "
+          f"{str(idx.min())} -> {str(r.last_valid_index())} | "
+          f"N={len(clean):3d} | miss_core={n_miss:3d} | "
+          f"mean={clean.mean():+.3f}  [{clean.min():.3f}, {clean.max():.3f}]")
+
+print()
+if all_ok:
+    print("  All checks passed.")
+else:
+    print("  Some checks failed.")
+
+# ============================================================
+# STEP 6 — FIGURE
+# ============================================================
+
+print(f"\n{'─'*65}")
+print("STEP 6 -- Visual check figure")
+print(f"{'─'*65}")
+
+# ── Figure 16 — Commodity cumulative returns ──────────────────
+colours = ["#1a6faf", "#d7191c", "#4dac26", "#762a83", "#f46d43"]
+labels_fig = {
+    "cm1": "cm1 — Livestock (Cattle, Hogs)",
+    "cm2": "cm2 — Industrial Metals (Copper, Aluminium, Zinc, Nickel)",
+    "cm3": "cm3 — Precious Metals (Gold, Silver, Platinum)",
+    "cm4": "cm4 — Energy (Oil, Heating Oil, Nat. Gas, Gasoline)",
+    "cm5": "cm5 — Agriculture (Corn, Soybeans, Wheat, Cotton, Coffee, Sugar)",
+}
+
+fig, ax = plt.subplots(figsize=(13, 6))
+fig.subplots_adjust(left=0.07, right=0.97, top=0.88, bottom=0.40)
+
+for (label, r), col in zip(portfolio_returns.items(), colours):
+    s = r.dropna().copy()
+    s.index = s.index.to_timestamp()
+    cum = (1 + s / 100).cumprod()
+    ax.plot(cum.index, cum.values, color=col, linewidth=1.5,
+            label=labels_fig[label], alpha=0.9)
+
+ax.axhline(1, color="black", linewidth=0.8, linestyle="--")
+ax.axvspan(pd.Timestamp("2003-05-01"), pd.Timestamp("2023-06-30"),
+           color="lightgrey", alpha=0.25, label="Analysis window")
+ax.set_ylabel("Cumulative gross return (base = 1 in Jan 1999)", fontsize=12)
+ax.legend(fontsize=9, frameon=False)
+ax.tick_params(labelsize=11)
+ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+ax.xaxis.set_major_locator(mdates.YearLocator(4))
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+
+ax.text(0, 1.08, "F I G U R E   1 6", transform=ax.transAxes,
+        fontsize=8, color="gray", va="bottom")
+ax.text(0, 1.02,
+        "Commodity Futures Portfolios — Cumulative Returns by Sector (GSCI)",
+        transform=ax.transAxes, fontsize=13, color="black",
+        va="bottom", style="italic", fontweight="bold")
+
+ax.text(0, -0.22,
+    r"$\it{Notes:}$  Each portfolio is the equal-weighted average of monthly log returns of its"
+    "\nconstituent commodities, computed from end-of-month GSCI price levels"
+    "\n(commodity_prices_endmonth.csv, Lumbanraja et al. 2025).",
+    transform=ax.transAxes, fontsize=9, color="#444444", va="top", linespacing=1.7)
+ax.text(0, -0.38,
+    "Commodity futures already represent excess returns — no risk-free rate is subtracted,"
+    "\nfollowing the standard treatment in Fang, Liu and Roussanov (2022)."
+    " Data ends October 2024"
+    "\n(two months missing at the end — negligible impact on estimation).",
+    transform=ax.transAxes, fontsize=9, color="#444444", va="top", linespacing=1.7)
+ax.text(0, -0.54,
+    "Grey shading = core analysis window (May 2003 – Jun 2023).",
+    transform=ax.transAxes, fontsize=9, color="#444444", va="top")
+
+plt.savefig(OUTPUT_FIG, dpi=200, bbox_inches="tight")
+plt.close()
+print(f"  OK: Figure saved -> Fig16_commodities.png")
+
+# ============================================================
+# FINAL STATUS
+# ============================================================
+
+print(f"\n{'='*65}")
+print("FINAL STATUS")
+print(f"{'='*65}\n")
+
+for fname, label in [
+    ("commodity_prices_endmonth.csv", "GSCI raw prices (input)"),
+    ("commodity_total_return.csv",    "Commodity returns cm1-cm5"),
+]:
+    # Check in both raw and raw/Exercise_3
+    for folder in [RAW, RAW_EX3]:
+        path = os.path.join(folder, fname)
+        if os.path.exists(path):
+            kb = os.path.getsize(path) / 1024
+            print(f"  OK  {fname:<45s}  {kb:6.1f} KB  ({label})")
+            break
+    else:
+        print(f"  !!  {fname:<45s}  MISSING")
+
+print(f"\n  Portfolio summary:")
+print(f"  cm1 Livestock      : LiveCattle + LeanHogs")
+print(f"  cm2 Ind. Metals    : Copper + Aluminum + Zinc + Nickel")
+print(f"  cm3 Precious Metals: Gold + Silver + Platinum")
+print(f"  cm4 Energy         : CrudeOil + HeatingOil + NaturalGas + UnleadedGasoline")
+print(f"  cm5 Agriculture    : Corn + Soybeans + WheatCBOT + Cotton + Coffee + Sugar")
+
+print(f"\n  Scripts done so far:")
+print(f"  09_download_fred.py    -> macro + treasury yields  ✓")
+print(f"  09a_shiller.py         -> Shiller P/D ratio        ✓")
+print(f"  09b_ken_french.py      -> stocks s1-s5             (later)")
+print(f"  09c_clean_bonds.py     -> corporate bonds cp1-cp4  ✓")
+print(f"  09d_clean_reits_msci.py-> REITs + MSCI             (next)")
+print(f"  09e_clean_currencies.py-> currency carry fx1-fx7   ✓")
+print(f"  09f_clean_commodities.py-> commodities cm1-cm5     ✓")
+print(f"\n{'='*65}")
+print("09f_clean_commodities.py -- DONE")
+print(f"{'='*65}")
